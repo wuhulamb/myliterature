@@ -1,4 +1,4 @@
-# 文件名：main.py
+# 文件名：literature.py
 # 功能：文献管理核心模块（支持多主题）
 
 import os
@@ -34,7 +34,7 @@ class SearchResult(BaseModel):
 
 # ============ 数据库操作 ============
 def init_db(db_path=DB_PATH):
-    """初始化数据库（增加collections表）"""
+    """初始化数据库"""
     conn = sqlite3.connect(db_path)
     # 创建主题表
     conn.execute("""
@@ -122,10 +122,10 @@ def save_to_db(info: PaperInfo, file_path: str, collection_name: str, db_path=DB
 
 
 def get_all_literatures(db_path=DB_PATH):
-    """获取所有文献（包含主题名称）"""
+    """获取所有文献"""
     conn = sqlite3.connect(db_path)
     cursor = conn.execute("""
-        SELECT l.id, l.year, l.journal, l.title, l.authors, c.name
+        SELECT l.id, l.year, l.journal, l.title, l.authors, l.summary, c.name, l.file_path
         FROM literatures l
         JOIN collections c ON l.collection_id = c.id
         ORDER BY c.name, l.id
@@ -139,7 +139,7 @@ def get_literatures_by_collection(collection_name: str, db_path=DB_PATH):
     """获取指定主题下的所有文献"""
     conn = sqlite3.connect(db_path)
     cursor = conn.execute("""
-        SELECT l.id, l.year, l.journal, l.title, l.authors, l.summary
+        SELECT l.id, l.year, l.journal, l.title, l.authors, l.summary, c.name, l.file_path
         FROM literatures l
         JOIN collections c ON l.collection_id = c.id
         WHERE c.name = ?
@@ -249,11 +249,23 @@ def search_literature(question: str, collection_name: str):
 
     for pid in result.relevant_ids:
         if pid in papers_dict:
-            p = papers_dict[pid]
-            print(f"\n[ID:{p[0]}] {p[3]}")
-            print(f"  {p[1]} | {p[2]} | {p[4]}")
+            print_paper_info(papers_dict[pid])
 
     return result
+
+
+# ============ 打印函数 ============
+def print_paper_info(paper: tuple, indent: str = "  "):
+    """
+    统一打印单条文献信息
+    :param paper: 文献数据元组 (id, year, journal, title, authors, summary, collection_name, file_path)
+    :param indent: 缩进字符，默认两个空格
+    """
+    pid, year, journal, title, authors, _, _, file_path = paper
+
+    print(f"{indent}[ID:{pid}] {title}")
+    print(f"{indent}    {year} | {journal} | {authors}")
+    print(f"{indent}    路径: {file_path}")
 
 
 # ============ 命令行接口 ============
@@ -275,7 +287,7 @@ def main():
     p_search.add_argument("-c", "--collection", required=True, help="主题名称")
     p_search.add_argument("question", help="搜索问题")
 
-    # list 命令 (修改：增加可选的 -c 参数)
+    # list 命令
     p_list = subparsers.add_parser("list", help="列出文献")
     p_list.add_argument("-c", "--collection", help="指定主题名称（可选）")
 
@@ -298,9 +310,7 @@ def main():
             else:
                 print(f"[{args.collection}] (共{len(papers)}篇)")
                 for p in papers:
-                    # p 结构: (id, year, journal, title, authors, summary)
-                    print(f"  [ID:{p[0]}] {p[3]}")
-                    print(f"      {p[1]} | {p[2]} | {p[4]}")
+                    print_paper_info(p)
         else:
             # 列出所有文献
             papers = get_all_literatures()
@@ -309,20 +319,19 @@ def main():
             else:
                 # 统计每个主题的文献数量
                 from collections import Counter
-                # p[5] 是 collection_name
-                counts = Counter(p[5] for p in papers)
+                # p[6] 是 collection_name
+                counts = Counter(p[6] for p in papers)
 
                 print("所有文献列表:")
                 current_coll = None
                 for p in papers:
-                    # p 结构: (id, year, journal, title, authors, collection_name)
-                    coll_name = p[5]
+                    # p 结构: (id, year, journal, title, authors, summary, collection_name, file_path)
+                    coll_name = p[6]
                     # 按主题分组显示
                     if coll_name != current_coll:
                         current_coll = coll_name
                         print(f"\n[{coll_name}] (共{counts[coll_name]}篇)")
-                    print(f"  [ID:{p[0]}] {p[3]}")
-                    print(f"      {p[1]} | {p[2]} | {p[4]}")
+                    print_paper_info(p)
     else:
         parser.print_help()
 
