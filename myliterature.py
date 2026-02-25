@@ -1,4 +1,4 @@
-# 文件名：literature.py
+# 文件名：myliterature.py
 # 功能：文献管理核心模块（支持多主题）
 
 import os

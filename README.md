@@ -50,19 +50,19 @@ CHATECNU_API_KEY=your_api_key_here
 **1. 导入文献**
 指定文件路径和主题名称：
 ```bash
-python literature.py import -c "人工智能" "paper.txt"
+python myliterature.py import -c "人工智能" "paper.txt"
 ```
 
 **2. 搜索文献**
 指定主题和问题进行检索：
 ```bash
-python literature.py search -c "人工智能" "有哪些关于神经网络的研究？"
+python myliterature.py search -c "人工智能" "有哪些关于神经网络的研究？"
 ```
 
 **3. 查看主题**
 列出所有主题及文献数量：
 ```bash
-python literature.py list
+python myliterature.py list
 ```
 
 ### 方式二：函数调用方式
@@ -70,7 +70,7 @@ python literature.py list
 在其他Python脚本中引入并调用核心函数：
 
 ```python
-from literature import import_literature, search_literature, list_collections
+from myliterature import import_literature, search_literature, list_collections
 
 # 1. 导入文献到指定主题
 import_literature("path/to/paper.txt", "机器学习")
