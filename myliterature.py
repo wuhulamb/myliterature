@@ -359,7 +359,7 @@ def main():
     # search 命令
     p_search = subparsers.add_parser("search", help="搜索文献")
     p_search.add_argument("-c", "--collection", required=True, help="主题名称")
-    p_search.add_argument("question", help="搜索问题")
+    p_search.add_argument("-q", "--query", required=True, help="查询内容")
 
     # list 命令
     p_list = subparsers.add_parser("list", help="列出文献")
@@ -379,7 +379,7 @@ def main():
             # 导入目录
             import_directory(args.dir, args.collection)
     elif args.command == "search":
-        search_literature(args.question, args.collection)
+        search_literature(args.query, args.collection)
     elif args.command == "list":
         if args.collection:
             # 列出指定主题的文献

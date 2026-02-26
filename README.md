@@ -1,4 +1,4 @@
-# 文献管理系统
+# 基于AI的文献管理系统
 
 > 我的文献我做主！
 
@@ -48,7 +48,7 @@ CHATECNU_API_KEY=your_api_key_here
 
 假设你的文件结构为：`literatures/collection1/` (存放深度学习论文) 和 `literatures/collection2/` (存放强化学习论文)
 
-#### 1 智能重命名
+#### 1. 智能重命名
 
 批量整理子文件夹内的 PDF 文件名
 ```bash
@@ -58,7 +58,7 @@ python rename_with_ai.py -d ./literatures/collection2
 
 > 💡 **提示**：重复运行命令会自动跳过已存在的文献，支持增量更新
 
-#### 2 导入数据库
+#### 2. 导入数据库
 
 将文件夹内容导入系统，并指定主题名（`-c`）
 ```bash
@@ -71,7 +71,7 @@ python myliterature.py import -c RL -d ./literatures/collection2
 
 > 💡 **提示**：重复运行命令会自动跳过已存在的文献，支持增量更新
 
-#### 3 查看与检索
+#### 3. 查看与检索
 
 列出文献或直接向 AI 提问
 ```bash
@@ -79,10 +79,10 @@ python myliterature.py import -c RL -d ./literatures/collection2
 python myliterature.py list -c Deep_Learning
 
 # 向 "Deep_Learning" 主题提问
-python myliterature.py search -c Deep_Learning "残差网络的核心创新是什么？"
+python myliterature.py search -c Deep_Learning -q "残差网络的核心创新是什么？"
 ```
 
-## 🗄️ 数据库结构
+## 🗄️ SQLite Database
 
 系统自动创建 `literatures.db` 数据库，包含两个表：
 
