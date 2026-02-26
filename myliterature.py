@@ -1,13 +1,15 @@
 # 文件名：myliterature.py
-# 功能：文献管理核心模块（支持多主题）
+# 功能：文献管理核心模块
 
 import os
 import sqlite3
 import argparse
-from typing import List
+import hashlib
+from typing import List, Optional, Tuple
 from openai import OpenAI
 from pydantic import BaseModel
 from dotenv import load_dotenv
+import pymupdf
 
 # ============ 配置 ============
 load_dotenv()
@@ -32,19 +34,29 @@ class SearchResult(BaseModel):
     answer: str
 
 
+# ============ 工具函数 ============
+def calculate_text_hash(text: str) -> str:
+    """计算文本内容的SHA-256 Hash值"""
+    clean_text = text.strip()
+    return hashlib.sha256(clean_text.encode('utf-8')).hexdigest()
+
+
 # ============ 数据库操作 ============
 def init_db(db_path=DB_PATH):
     """初始化数据库"""
     conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
     # 创建主题表
-    conn.execute("""
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS collections (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE
         )
     """)
+
     # 创建文献表（关联主题）
-    conn.execute("""
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS literatures (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             collection_id INTEGER,
@@ -53,10 +65,12 @@ def init_db(db_path=DB_PATH):
             title TEXT,
             authors TEXT,
             summary TEXT,
-            file_path TEXT UNIQUE,
+            file_path TEXT,
+            content_hash TEXT UNIQUE,
             FOREIGN KEY(collection_id) REFERENCES collections(id)
         )
     """)
+
     conn.commit()
     conn.close()
 
@@ -83,7 +97,30 @@ def get_or_create_collection(name: str, db_path=DB_PATH) -> int:
     return coll_id
 
 
-def save_to_db(info: PaperInfo, file_path: str, collection_name: str, db_path=DB_PATH):
+def check_hash_exists(content_hash: str, db_path=DB_PATH) -> Optional[Tuple[int, str]]:
+    """
+    检查Hash是否存在于数据库中
+    :return: 如果存在，返回 (collection_id, collection_name)；否则返回 None
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT l.collection_id, c.name
+        FROM literatures l
+        JOIN collections c ON l.collection_id = c.id
+        WHERE l.content_hash = ?
+    """, (content_hash,))
+
+    result = cursor.fetchone()
+    conn.close()
+
+    if result:
+        return (result[0], result[1])
+    return None
+
+
+def save_to_db(info: PaperInfo, file_path: str, collection_name: str, content_hash: str, db_path=DB_PATH):
     """保存文献信息到指定主题"""
     abs_path = os.path.abspath(file_path)
     coll_id = get_or_create_collection(collection_name)
@@ -91,32 +128,15 @@ def save_to_db(info: PaperInfo, file_path: str, collection_name: str, db_path=DB
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    # 检查标题、年份、作者是否同时匹配
-    cursor.execute("""
-        SELECT l.title, c.name FROM literatures l
-        JOIN collections c ON l.collection_id = c.id
-        WHERE l.title = ? COLLATE NOCASE
-          AND l.year = ?
-          AND l.journal = ? COLLATE NOCASE
-          AND collection_id = ?
-    """, (info.title, info.year, info.journal, coll_id))
-    existing = cursor.fetchone()
-
-    if existing:
-        print(f"✗ 文献已存在: '{info.title}'")
-        print(f"  已存在于主题 [{existing[1]}]")
-        conn.close()
-        return
-
     try:
         cursor.execute("""
-            INSERT INTO literatures (collection_id, year, journal, title, authors, summary, file_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (coll_id, info.year, info.journal, info.title, info.authors, info.summary, abs_path))
+            INSERT INTO literatures (collection_id, year, journal, title, authors, summary, file_path, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (coll_id, info.year, info.journal, info.title, info.authors, info.summary, abs_path, content_hash))
         conn.commit()
         print(f"✓ 已保存到 [{collection_name}]: {info.title}")
     except sqlite3.IntegrityError:
-        print(f"✗ 已存在: {file_path}")
+        print(f"✗ 存入失败：文献hash相同")
     finally:
         conn.close()
 
@@ -174,7 +194,7 @@ def extract_info_by_llm(text: str) -> PaperInfo:
 
 def search_by_llm(question: str, collection_name: str) -> SearchResult:
     """调用LLM在指定主题下进行语义检索"""
-    # 1. 获取该主题下的所有文献
+    # 获取该主题下的所有文献
     papers = get_literatures_by_collection(collection_name)
 
     if not papers:
@@ -192,7 +212,7 @@ def search_by_llm(question: str, collection_name: str) -> SearchResult:
         context += f"主要内容: {p[5]}\n"
         context += "-" * 40 + "\n"
 
-    # 2. 调用LLM检索
+    # 调用LLM检索
     system_prompt = """你是一个文献检索助手。根据用户问题，从提供的文献库中找出最相关的文献。
 请返回：
 1. relevant_ids: 相关文献的ID列表（按相关度排序）
@@ -210,26 +230,76 @@ def search_by_llm(question: str, collection_name: str) -> SearchResult:
 
 
 # ============ 核心功能函数 ============
-def import_literature(file_path: str, collection_name: str):
+def import_single_file(file_path: str, collection_name: str):
     """
-    导入单篇文献到指定主题
-    :param file_path: 文本文件路径
+    导入单篇PDF文献到指定主题
+    :param file_path: PDF文件路径
     :param collection_name: 主题名称
     """
     if not os.path.exists(file_path):
         print(f"文件不存在: {file_path}")
         return
 
-    with open(file_path, 'r', encoding='utf-8') as f:
-        text = f.read().strip()
+    # 读取PDF文本
+    try:
+        doc = pymupdf.open(file_path)
+        text = ""
+        for page in doc:
+            text += page.get_text()
+        text = text.strip()
+        doc.close()
+    except Exception as e:
+        print(f"✗ 读取PDF失败: {file_path} (错误: {e})")
+        return
 
     if not text:
-        print("文件内容为空")
+        print(f"文件内容为空: {file_path}")
+        return
+
+    # 计算Hash
+    content_hash = calculate_text_hash(text)
+
+    # 在调用LLM前预检Hash
+    existing_info = check_hash_exists(content_hash)
+    if existing_info:
+        _, existing_coll_name = existing_info
+        print(f"✗ 跳过处理：文献内容已存在")
+        print(f"  已存在于主题 [{existing_coll_name}]")
         return
 
     print(f"正在解析: {file_path} ...")
     info = extract_info_by_llm(text)
-    save_to_db(info, file_path, collection_name)
+    save_to_db(info, file_path, collection_name, content_hash)
+
+
+def import_directory(dir_path: str, collection_name: str):
+    """
+    导入目录下所有PDF文件到指定主题
+    :param dir_path: 目录路径
+    :param collection_name: 主题名称
+    """
+    if not os.path.exists(dir_path):
+        print(f"目录不存在: {dir_path}")
+        return
+
+    if not os.path.isdir(dir_path):
+        print(f"不是目录: {dir_path}")
+        return
+
+    # 获取目录下所有pdf文件（不包含子目录）
+    files = [f for f in os.listdir(dir_path)
+             if os.path.isfile(os.path.join(dir_path, f)) and f.lower().endswith('.pdf')]
+
+    if not files:
+        print(f"目录中没有PDF文件: {dir_path}")
+        return
+
+    print(f"开始导入目录: {dir_path} (共 {len(files)} 个PDF文件)")
+
+    for i, filename in enumerate(files, 1):
+        file_path = os.path.join(dir_path, filename)
+        print(f"\n[{i}/{len(files)}] 处理: {filename}")
+        import_single_file(file_path, collection_name)
 
 
 def search_literature(question: str, collection_name: str):
@@ -280,7 +350,11 @@ def main():
     # import 命令
     p_import = subparsers.add_parser("import", help="导入文献")
     p_import.add_argument("-c", "--collection", required=True, help="主题名称")
-    p_import.add_argument("file", help="文件路径")
+
+    # 互斥参数：要么导入单个文件，要么导入目录
+    import_group = p_import.add_mutually_exclusive_group(required=True)
+    import_group.add_argument("-f", "--file", help="导入单个文件")
+    import_group.add_argument("-d", "--dir", help="导入目录下所有文件")
 
     # search 命令
     p_search = subparsers.add_parser("search", help="搜索文献")
@@ -298,7 +372,12 @@ def main():
 
     # 分发命令
     if args.command == "import":
-        import_literature(args.file, args.collection)
+        if args.file:
+            # 导入单个文件
+            import_single_file(args.file, args.collection)
+        elif args.dir:
+            # 导入目录
+            import_directory(args.dir, args.collection)
     elif args.command == "search":
         search_literature(args.question, args.collection)
     elif args.command == "list":
