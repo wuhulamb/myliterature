@@ -5,7 +5,6 @@ import os
 import sqlite3
 import argparse
 import hashlib
-from typing import List, Optional, Tuple
 from openai import OpenAI
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -30,7 +29,7 @@ class PaperInfo(BaseModel):
 
 class SearchResult(BaseModel):
     """检索结果结构"""
-    relevant_ids: List[int]
+    relevant_ids: list[int]
     answer: str
 
 
@@ -66,7 +65,7 @@ def init_db(db_path=DB_PATH):
             authors TEXT,
             summary TEXT,
             file_path TEXT,
-            content_hash TEXT UNIQUE,
+            content_hash TEXT,
             FOREIGN KEY(collection_id) REFERENCES collections(id)
         )
     """)
@@ -97,27 +96,28 @@ def get_or_create_collection(name: str, db_path=DB_PATH) -> int:
     return coll_id
 
 
-def check_hash_exists(content_hash: str, db_path=DB_PATH) -> Optional[Tuple[int, str]]:
+def check_hash_exists(content_hash: str, collection_name: str, db_path=DB_PATH) -> bool:
     """
-    检查Hash是否存在于数据库中
-    :return: 如果存在，返回 (collection_id, collection_name)；否则返回 None
+    检查Hash是否存在于指定主题的数据库中
+    :param content_hash: 文件内容哈希
+    :param collection_name: 指定主题名称
+    :return: 如果存在返回True，否则返回False
     """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT l.collection_id, c.name
+        SELECT 1
         FROM literatures l
         JOIN collections c ON l.collection_id = c.id
-        WHERE l.content_hash = ?
-    """, (content_hash,))
+        WHERE l.content_hash = ? AND c.name = ?
+        LIMIT 1
+    """, (content_hash, collection_name))
 
     result = cursor.fetchone()
     conn.close()
 
-    if result:
-        return (result[0], result[1])
-    return None
+    return result is not None
 
 
 def save_to_db(info: PaperInfo, file_path: str, collection_name: str, content_hash: str, db_path=DB_PATH):
@@ -136,7 +136,7 @@ def save_to_db(info: PaperInfo, file_path: str, collection_name: str, content_ha
         conn.commit()
         print(f"✓ 已保存到 [{collection_name}]: {info.title}")
     except sqlite3.IntegrityError:
-        print(f"✗ 存入失败：文献hash相同")
+        print(f"✗ 导入失败：文献hash相同")
     finally:
         conn.close()
 
@@ -260,11 +260,8 @@ def import_single_file(file_path: str, collection_name: str):
     content_hash = calculate_text_hash(text)
 
     # 在调用LLM前预检Hash
-    existing_info = check_hash_exists(content_hash)
-    if existing_info:
-        _, existing_coll_name = existing_info
-        print(f"✗ 跳过处理：文献内容已存在")
-        print(f"  已存在于主题 [{existing_coll_name}]")
+    if check_hash_exists(content_hash, collection_name):
+        print(f"✗ 跳过处理: 文献内容在主题 [{collection_name}] 中已存在")
         return
 
     print(f"正在解析: {file_path} ...")
