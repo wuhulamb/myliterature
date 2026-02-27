@@ -58,15 +58,24 @@ def init_db(db_path=DB_PATH):
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS literatures (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            collection_id INTEGER,
             year INTEGER,
             journal TEXT,
             title TEXT,
             authors TEXT,
             summary TEXT,
             file_path TEXT,
-            content_hash TEXT,
-            FOREIGN KEY(collection_id) REFERENCES collections(id)
+            content_hash TEXT UNIQUE
+        )
+    """)
+
+    # 创建关联表
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS collection_literatures (
+            collection_id INTEGER,
+            literature_id INTEGER,
+            PRIMARY KEY (collection_id, literature_id),
+            FOREIGN KEY(collection_id) REFERENCES collections(id),
+            FOREIGN KEY(literature_id) REFERENCES literatures(id)
         )
     """)
 
@@ -96,32 +105,29 @@ def get_or_create_collection(name: str, db_path=DB_PATH) -> int:
     return coll_id
 
 
-def check_hash_exists(content_hash: str, collection_name: str, db_path=DB_PATH) -> bool:
-    """
-    检查Hash是否存在于指定主题的数据库中
-    :param content_hash: 文件内容哈希
-    :param collection_name: 指定主题名称
-    :return: 如果存在返回True，否则返回False
-    """
+def get_literature_id_by_hash(content_hash: str, db_path=DB_PATH) -> int:
+    """根据Hash获取文献ID，如果不存在返回None"""
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT 1
-        FROM literatures l
-        JOIN collections c ON l.collection_id = c.id
-        WHERE l.content_hash = ? AND c.name = ?
-        LIMIT 1
-    """, (content_hash, collection_name))
-
+    cursor.execute("SELECT id FROM literatures WHERE content_hash = ?", (content_hash,))
     result = cursor.fetchone()
     conn.close()
+    return result[0] if result else None
 
-    return result is not None
+
+def check_hash_exists(content_hash: str, db_path=DB_PATH) -> bool:
+    """检查Hash是否已存在于文献库中"""
+    return get_literature_id_by_hash(content_hash, db_path) is not None
 
 
-def save_to_db(info: PaperInfo, file_path: str, collection_name: str, content_hash: str, db_path=DB_PATH):
-    """保存文献信息到指定主题"""
+def save_to_db(info: PaperInfo | None, file_path: str, collection_name: str, content_hash: str, db_path=DB_PATH):
+    """
+    保存文献信息到指定主题
+    逻辑：
+    1. 如果文献不存在，插入 literatures 表。
+    2. 如果文献已存在，获取其 ID。
+    3. 在 collection_literatures 表中建立关联。
+    """
     abs_path = os.path.abspath(file_path)
     coll_id = get_or_create_collection(collection_name)
 
@@ -129,25 +135,39 @@ def save_to_db(info: PaperInfo, file_path: str, collection_name: str, content_ha
     cursor = conn.cursor()
 
     try:
+        lit_id = get_literature_id_by_hash(content_hash, db_path)
+
+        if lit_id is None:
+            cursor.execute("""
+                INSERT INTO literatures (year, journal, title, authors, summary, file_path, content_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (info.year, info.journal, info.title, info.authors, info.summary, abs_path, content_hash))
+            lit_id = cursor.lastrowid
+            print(f"✓ 导入文献: {info.title}")
+
+        # 处理关联关系
         cursor.execute("""
-            INSERT INTO literatures (collection_id, year, journal, title, authors, summary, file_path, content_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (coll_id, info.year, info.journal, info.title, info.authors, info.summary, abs_path, content_hash))
+            INSERT OR IGNORE INTO collection_literatures (collection_id, literature_id)
+            VALUES (?, ?)
+        """, (coll_id, lit_id))
+
         conn.commit()
-        print(f"✓ 已保存到 [{collection_name}]: {info.title}")
-    except sqlite3.IntegrityError:
-        print(f"✗ 导入失败：文献hash相同")
+
+    except Exception as e:
+        print(f"✗ 保存失败: {e}")
+        conn.rollback()
     finally:
         conn.close()
 
 
 def get_all_literatures(db_path=DB_PATH):
-    """获取所有文献"""
+    """获取所有文献及其关联的主题"""
     conn = sqlite3.connect(db_path)
     cursor = conn.execute("""
         SELECT l.id, l.year, l.journal, l.title, l.authors, l.summary, c.name, l.file_path
         FROM literatures l
-        JOIN collections c ON l.collection_id = c.id
+        JOIN collection_literatures cl ON l.id = cl.literature_id
+        JOIN collections c ON cl.collection_id = c.id
         ORDER BY c.name, l.id
     """)
     results = cursor.fetchall()
@@ -161,7 +181,8 @@ def get_literatures_by_collection(collection_name: str, db_path=DB_PATH):
     cursor = conn.execute("""
         SELECT l.id, l.year, l.journal, l.title, l.authors, l.summary, c.name, l.file_path
         FROM literatures l
-        JOIN collections c ON l.collection_id = c.id
+        JOIN collection_literatures cl ON l.id = cl.literature_id
+        JOIN collections c ON cl.collection_id = c.id
         WHERE c.name = ?
     """, (collection_name,))
     results = cursor.fetchall()
@@ -260,13 +281,13 @@ def import_single_file(file_path: str, collection_name: str):
     content_hash = calculate_text_hash(text)
 
     # 在调用LLM前预检Hash
-    if check_hash_exists(content_hash, collection_name):
-        print(f"✗ 跳过处理: 文献内容在主题 [{collection_name}] 中已存在")
-        return
-
-    print(f"正在解析: {file_path} ...")
-    info = extract_info_by_llm(text)
-    save_to_db(info, file_path, collection_name, content_hash)
+    if check_hash_exists(content_hash):
+        print(f"⚠ 文献内容已存在于数据库中，正在将其关联到主题 [{collection_name}]...")
+        save_to_db(None, file_path, collection_name, content_hash)
+    else:
+        print(f"正在解析: {file_path} ...")
+        info = extract_info_by_llm(text)
+        save_to_db(info, file_path, collection_name, content_hash)
 
 
 def import_directory(dir_path: str, collection_name: str):
