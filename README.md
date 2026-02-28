@@ -84,7 +84,7 @@ python myliterature.py search -c Deep_Learning -q "残差网络的核心创新�
 
 ## 🗄️ SQLite Database
 
-系统自动创建 `literatures.db` 数据库，包含两个表：
+系统自动创建 `literatures.db` 数据库，包含三个表：
 
 **collections 表（主题）**
 | 字段 | 类型 | 说明 |
@@ -96,7 +96,6 @@ python myliterature.py search -c Deep_Learning -q "残差网络的核心创新�
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | INTEGER | 主键 |
-| collection_id | INTEGER | 关联主题ID |
 | year | INTEGER | 年份 |
 | journal | TEXT | 期刊 |
 | title | TEXT | 题目 |
@@ -104,3 +103,10 @@ python myliterature.py search -c Deep_Learning -q "残差网络的核心创新�
 | summary | TEXT | 主要内容总结 |
 | file_path | TEXT | 文件绝对路径 |
 | content_hash | TEXT | 文件内容的 SHA-256 哈希值（唯一） |
+
+**collection_literatures 表（关联关系）**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| collection_id | INTEGER | 外键，指向 `collections.id` |
+| literature_id | INTEGER | 外键，指向 `literatures.id` |
+| 主键 | (collection_id, literature_id) | 联合主键，防止重复关联 |
