@@ -8,7 +8,6 @@
 import os
 import re
 import argparse
-from datetime import datetime
 from typing import Optional
 from openai import OpenAI
 from pydantic import BaseModel, Field
@@ -231,7 +230,7 @@ def main(target_dir: str):
 
     # 输出统计信息
     print("=" * 50)
-    print(f"处理完成！统计结果:")
+    print("处理完成！统计结果:")
     print(f"  处理成功: {processed_count} 个文件")
     print(f"  跳过已处理: {skipped_count} 个文件")
     print(f"  处理失败: {failed_count} 个文件")
