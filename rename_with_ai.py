@@ -7,6 +7,7 @@
 
 import os
 import re
+import json
 import argparse
 from typing import Optional
 from openai import OpenAI
@@ -66,12 +67,15 @@ def extract_publication_info(file_content: str) -> Optional[PaperInfo]:
     )
 
     system_prompt = (
-        "你是一个专业的学术助手。请仔细阅读论文内容，准确提取以下信息：\n"
-        "1. 发表时间：论文发表的年份（格式：YYYY）\n"
-        "2. 发表期刊：论文发表的期刊名称\n"
-        "3. 论文标题：论文的完整标题\n"
-        "4. 论文作者：论文的主要作者姓名\n\n"
-        "请确保信息准确，不要添加任何额外说明。"
+        "你是一个专业的学术助手。"
+        "请严格按照以下 JSON 格式输出，不要添加任何列表、序号、注释、说明或额外文本：\n"
+        "{\n"
+        "  \"year\": 2006,\n"
+        "  \"journal\": \"期刊名称\",\n"
+        "  \"title\": \"论文标题\",\n"
+        "  \"author\": \"作者\"\n"
+        "}\n"
+        "仅输出合法 JSON，内容字段请根据论文内容填写。"
     )
 
     user_prompt = f"请提取以下论文的信息：\n\n{file_content}"
@@ -79,20 +83,28 @@ def extract_publication_info(file_content: str) -> Optional[PaperInfo]:
     retry_count = 0
     max_retries = 3
 
+    # 使用 json_schema 格式，让模型输出结构化 JSON
+    json_schema = json.dumps(PaperInfo.model_json_schema())
+
     while retry_count < max_retries:
         try:
             print("正在调用AI API提取论文信息...")
 
-            completion = client.chat.completions.parse(
+            response = client.chat.completions.create(
                 model="ecnu-turbo",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                response_format=PaperInfo,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "foo", "schema": json.loads(json_schema)},
+                },
             )
 
-            paper_info = completion.choices[0].message.parsed
+            # 解析模型返回的 JSON 内容
+            parsed = json.loads(response.choices[0].message.content)
+            paper_info = PaperInfo(**parsed)
             print("成功提取论文信息")
             return paper_info
 
