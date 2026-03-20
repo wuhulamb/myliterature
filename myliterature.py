@@ -5,6 +5,8 @@ import os
 import sqlite3
 import argparse
 import hashlib
+import json
+import re
 from openai import OpenAI
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -193,24 +195,37 @@ def get_literatures_by_collection(collection_name: str, db_path=DB_PATH):
 # ============ LLM处理 ============
 def extract_info_by_llm(text: str) -> PaperInfo:
     """调用LLM提取文献信息"""
-    system_prompt = """你是一个学术文献信息提取助手。请从给定的文献文本中提取以下字段：
-1. year: 发表年份
-2. journal: 发表期刊名称
-3. title: 文献标题
-4. authors: 作者名单（多人用逗号分隔）
-5. summary: 主要内容总结
+    system_prompt = (
+        "你是一个学术文献信息提取助手。"
+        "请严格按照以下 JSON 格式输出，不要添加任何列表、序号、注释、说明或额外文本：\n"
+        "{\n"
+        '  "year": 2006,\n'
+        '  "journal": "期刊名称",\n'
+        '  "title": "论文标题",\n'
+        '  "authors": "作者",\n'
+        '  "summary": "摘要"\n'
+        "}\n"
+        "仅输出合法 JSON，内容字段请根据论文内容填写。"
+    )
 
-如果某字段无法从文本中确定，填写"未知"。"""
+    user_prompt = f"请提取以下文献的信息：\n\n{text}"
 
-    completion = client.chat.completions.parse(
+    completion = client.chat.completions.create(
         model="ecnu-plus",
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"文献内容：\n\n{text}"}
+            {"role": "user", "content": user_prompt}
         ],
-        response_format=PaperInfo,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "PaperInfo",
+                "schema": json.loads(json.dumps(PaperInfo.model_json_schema()))
+            },
+        },
     )
-    return PaperInfo.model_validate_json(completion.choices[0].message.content)
+    parsed = json.loads(completion.choices[0].message.content)
+    return PaperInfo(**parsed)
 
 
 def search_by_llm(question: str, collection_name: str) -> SearchResult:
@@ -234,20 +249,32 @@ def search_by_llm(question: str, collection_name: str) -> SearchResult:
         context += "-" * 40 + "\n"
 
     # 调用LLM检索
-    system_prompt = """你是一个文献检索助手。根据用户问题，从提供的文献库中找出最相关的文献。
-请返回：
-1. relevant_ids: 相关文献的ID列表（按相关度排序）
-2. answer: 对用户问题的回答（基于文献内容）"""
+    system_prompt = (
+        "你是一个文献检索助手。根据用户问题，从提供的文献库中找出最相关的文献。\n"
+        "请严格按照以下 JSON 格式输出，不要添加任何列表、序号、注释、说明或额外文本："
+        "{\n"
+        '  "relevant_ids": [1, 2, 3],\n'
+        '  "answer": "基于文献内容的回答"\n'
+        "}\n"
+        "仅输出合法 JSON，不要包含 markdown 格式或任何额外文本。"
+    )
 
-    completion = client.chat.completions.parse(
+    completion = client.chat.completions.create(
         model="ecnu-plus",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"{context}\n\n用户问题：{question}"}
         ],
-        response_format=SearchResult,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "SearchResult",
+                "schema": json.loads(json.dumps(SearchResult.model_json_schema()))
+            },
+        },
     )
-    return SearchResult.model_validate_json(completion.choices[0].message.content)
+    parsed = json.loads(completion.choices[0].message.content)
+    return SearchResult(**parsed)
 
 
 # ============ 核心功能函数 ============
