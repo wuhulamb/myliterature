@@ -10,7 +10,6 @@
 """
 
 import argparse
-import os
 from pathlib import Path
 
 import pymupdf
@@ -54,6 +53,11 @@ def batch_convert(pdf_folder: Path, output_folder: Path) -> None:
         # 生成对应的 TXT 文件名
         txt_name = pdf_file.stem + '.txt'
         txt_path = output_folder / txt_name
+
+        # 如果 TXT 文件已存在，跳过
+        if txt_path.exists():
+            print(f"跳过（已存在）：{pdf_file.name}")
+            continue
 
         try:
             print(f"转换：{pdf_file.name} -> {txt_name}")
