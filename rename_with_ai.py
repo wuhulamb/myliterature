@@ -24,10 +24,10 @@ MAX_FILENAME_LENGTH = 255  # 大多数系统的文件名长度限制
 
 class PaperInfo(BaseModel):
     """论文信息数据模型"""
-    year: int = Field(description="论文发表年份，格式为YYYY")
-    journal: str = Field(description="论文发表的期刊名称")
-    title: str = Field(description="论文的完整标题")
-    author: str = Field(description="论文的主要作者姓名")
+    year: int | str = Field(description="论文发表年份，格式为YYYY，无法提取时返回\"unknown\"")
+    journal: str = Field(description="论文发表的期刊名称，无法提取时返回\"unknown\"")
+    title: str = Field(description="论文的完整标题，无法提取时返回\"unknown\"")
+    author: list[str] = Field(description="论文的作者列表，无法提取时返回[\"unknown\"]")
 
 def extract_text_from_pdf(pdf_path: str) -> Optional[str]:
     """从PDF文件中提取文本内容"""
@@ -73,9 +73,9 @@ def extract_publication_info(file_content: str) -> Optional[PaperInfo]:
         "  \"year\": 2006,\n"
         "  \"journal\": \"期刊名称\",\n"
         "  \"title\": \"论文标题\",\n"
-        "  \"author\": \"作者\"\n"
+        "  \"author\": [\"作者1\", \"作者2\"]\n"
         "}\n"
-        "仅输出合法 JSON，内容字段请根据论文内容填写。"
+        "仅输出合法 JSON。如果某个字段无法从论文内容中提取，则使用 \"unknown\" 填充（year 字段也填充为字符串 \"unknown\"，author 字段填充为 [\"unknown\"]）。"
     )
 
     user_prompt = f"请提取以下论文的信息：\n\n{file_content}"
@@ -118,28 +118,35 @@ def extract_publication_info(file_content: str) -> Optional[PaperInfo]:
 
 def sanitize_filename(name: str) -> str:
     """清理文件名中的非法字符"""
-    cleaned = re.sub(r'[\\/*?:"<>|\']', "", name)
+    cleaned = re.sub(r'[\\/*?:"<>|\'“”‘’]', "", name)
     if cleaned != name:
         print(f"清理文件名: '{name}' -> '{cleaned}'")
     return cleaned
 
-def truncate_filename(filename: str, max_length: int = MAX_FILENAME_LENGTH) -> str:
-    """如果文件名太长，直接硬截断
-
-    保留文件扩展名完整
-    """
-    if len(filename) <= max_length:
-        return filename
-
-    print(f"警告：文件名过长 ({len(filename)} 字符)，进行截断: {filename}")
-
-    # 分离文件名和扩展名
+def truncate_filename(filename: str, max_bytes: int = MAX_FILENAME_LENGTH) -> str:
+    """如果文件名太长，按 UTF-8 字节长度截断，保留文件扩展名完整"""
     name_without_ext, ext = os.path.splitext(filename)
+    full_name = name_without_ext + ext
+    full_bytes = full_name.encode("utf-8")
 
-    # 直接硬截断，保留扩展名
-    truncated = name_without_ext[:max_length - len(ext)] + ext
-    print(f"截断后的文件名: {truncated}")
-    return truncated
+    if len(full_bytes) <= max_bytes:
+        return full_name
+
+    print(f"警告：文件名过长 ({len(full_bytes)} 字节)，进行截断: {filename}")
+
+    # 逐字符添加，直到字节数超过限制
+    truncated_name = ""
+    for ch in name_without_ext:
+        candidate = truncated_name + ch
+        # 检查加上这个字符后加上扩展名是否超限
+        candidate_full = candidate + ext
+        if len(candidate_full.encode("utf-8")) > max_bytes:
+            break
+        truncated_name = candidate
+
+    result = truncated_name + ext
+    print(f"截断后的文件名: {result}")
+    return result
 
 def safe_rename(old_path: str, new_name: str) -> bool:
     """安全重命名文件，处理文件名过长问题"""
@@ -218,7 +225,8 @@ def main(target_dir: str):
             date = paper_info.year
             journal = sanitize_filename(paper_info.journal)
             title = sanitize_filename(paper_info.title)
-            author = sanitize_filename(paper_info.author)
+            # 多个作者用下划线连接
+            author = "_".join(sanitize_filename(a) for a in paper_info.author)
 
             # 构建新文件名
             new_pdf_name = f"{date}{SEPARATOR}{journal}{SEPARATOR}{title}{SEPARATOR}{author}.pdf"
